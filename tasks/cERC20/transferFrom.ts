@@ -9,13 +9,14 @@ task("transferFrom", "Transfer cERC20 tokens from one address to another")
   .addOptionalParam("to", "receiver address")
   .addOptionalParam("amount", "transfer amount", "1000000") // 1 cERC20
   .setAction(async ({ signeraddress, tokenaddress, to, from, amount }, hre) => {
-    const { ethers, getChainId, getNamedAccounts, fhevm } = hre;
+    const { ethers, deployments, getChainId, getNamedAccounts, fhevm } = hre;
     const chainId = await getChainId();
     const signerAddress = signeraddress || (await getNamedAccounts()).user;
     const signer = await ethers.getSigner(signerAddress);
 
     if (!tokenaddress) {
-      tokenaddress = addresses[+chainId].cUSDC; // Default to deployed
+      const tokenDeployment = await deployments.get("cERC20");
+      tokenaddress = tokenDeployment.address || addresses[+chainId].cUSDC; // Default to deployed
     }
 
     if (!to) {
