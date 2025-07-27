@@ -15,16 +15,25 @@ import "./tasks/FHECounter";
 // Run 'npx hardhat vars setup' to see the list of variables that need to be set
 
 const MNEMONIC: string = vars.get("MNEMONIC", "test test test test test test test test test test test junk");
-const INFURA_API_KEY: string = vars.get("INFURA_API_KEY", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz");
+const INFURA_API_KEY: string = vars.get("INFURA_API_KEY");
+const ETHERSCAN_API_KEY: string = vars.get("ETHERSCAN_API_KEY");
+
+const DEPLOYER_PRIVATE_KEY = vars.get("DEPLOYER_PRIVATE_KEY");
+const USER_PRIVATE_KEY = vars.get("USER_PRIVATE_KEY");
+const RELAYER_PRIVATE_KEY = vars.get("RELAYER_PRIVATE_KEY");
+
+const accounts = [DEPLOYER_PRIVATE_KEY, USER_PRIVATE_KEY, RELAYER_PRIVATE_KEY];
 
 const config: HardhatUserConfig = {
-  defaultNetwork: "hardhat",
+  defaultNetwork: "sepolia",
   namedAccounts: {
     deployer: 0,
+    user: 1,
+    relayer: 2,
   },
   etherscan: {
     apiKey: {
-      sepolia: vars.get("ETHERSCAN_API_KEY", ""),
+      sepolia: ETHERSCAN_API_KEY,
     },
   },
   gasReporter: {
@@ -49,11 +58,7 @@ const config: HardhatUserConfig = {
       url: "http://localhost:8545",
     },
     sepolia: {
-      accounts: {
-        mnemonic: MNEMONIC,
-        path: "m/44'/60'/0'/0/",
-        count: 10,
-      },
+      accounts,
       chainId: 11155111,
       url: `https://sepolia.infura.io/v3/${INFURA_API_KEY}`,
     },
@@ -65,7 +70,7 @@ const config: HardhatUserConfig = {
     tests: "./test",
   },
   solidity: {
-    version: "0.8.24",
+    version: "0.8.29",
     settings: {
       metadata: {
         // Not including the metadata hash
