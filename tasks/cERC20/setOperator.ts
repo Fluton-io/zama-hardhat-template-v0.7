@@ -24,4 +24,6 @@ task("setOperator", "Set an operator for cERC20 tokens")
     const tokenContract = (await ethers.getContractAt("cERC20", tokenaddress, signer)) as unknown as CERC20;
 
     await tokenContract.setOperator(spenderaddress, timestamp);
+
+    console.log(`Operator set successfully.`);
   });
