@@ -2,8 +2,16 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {FHE, euint64, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
-import {IConfidentialFungibleToken} from "./interfaces/IConfidentialFungibleToken.sol";
+import {
+    FHE,
+    euint64,
+    euint32,
+    eaddress,
+    externalEuint64,
+    externalEuint32,
+    externalEaddress
+} from "@fhevm/solidity/lib/FHE.sol";
+import {IERC7984} from "./interfaces/IERC7984.sol";
 import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
 error MsgValueDoesNotMatchInputAmount();
@@ -25,8 +33,10 @@ contract FHEVMBridge is SepoliaConfig, Ownable2Step {
         euint64 outputAmount;
         uint256 id;
         uint32 originChainId;
-        uint32 destinationChainId;
+        euint32 destinationChainId;
         FilledStatus filledStatus;
+        bool solverPaid;
+        uint256 timeout;
     }
 
     uint256 public fee = 100; // 1%
@@ -34,9 +44,10 @@ contract FHEVMBridge is SepoliaConfig, Ownable2Step {
 
     mapping(uint256 intentId => bool exists) public doesIntentExist;
 
-    event IntentFulfilled(Intent intent);
-    event IntentCreated(Intent intent);
-    event IntentRepaid(Intent intent);
+    event IntentCreated(address indexed sender, address indexed relayer, Intent intent);
+    event IntentFulfilled(address indexed sender, address indexed relayer, Intent intent);
+    event IntentRepaid(address indexed sender, address indexed relayer, Intent intent);
+    event RelayerAuthorizationChanged(address indexed relayer, bool authorized);
 
     // WETH contract can not e used yet.
     // _ibcHandler and _timeout were not implemented yet.
@@ -50,32 +61,21 @@ contract FHEVMBridge is SepoliaConfig, Ownable2Step {
         address _outputToken,
         externalEuint64 _encInputAmount,
         externalEuint64 _encOutputAmount,
-        uint32 _destinationChainId,
+        externalEuint32 _destinationChainId,
         bytes calldata _inputProof
     ) public {
         euint64 encInputAmount = FHE.fromExternal(_encInputAmount, _inputProof);
         euint64 encOutputAmount = FHE.fromExternal(_encOutputAmount, _inputProof);
+        euint32 destinationChainId = FHE.fromExternal(_destinationChainId, _inputProof);
 
         FHE.allowThis(encInputAmount);
         FHE.allowThis(encOutputAmount);
+        FHE.allowThis(destinationChainId);
 
         require(FHE.isSenderAllowed(encInputAmount), "Unauthorized access to encrypted input amount.");
         require(FHE.isSenderAllowed(encOutputAmount), "Unauthorized access to encrypted output amount.");
-        uint256 id = uint256(
-            keccak256(
-                abi.encodePacked(
-                    _sender,
-                    _receiver,
-                    _relayer,
-                    _inputToken,
-                    _outputToken,
-                    encInputAmount,
-                    encOutputAmount,
-                    _destinationChainId,
-                    block.timestamp
-                )
-            )
-        );
+        require(FHE.isSenderAllowed(destinationChainId), "Unauthorized access to encrypted destination chain ID.");
+        uint256 id = uint256(keccak256(abi.encodePacked(_sender, _receiver, _relayer, block.timestamp, block.number)));
 
         Intent memory intent = Intent({
             sender: _sender,
@@ -87,21 +87,24 @@ contract FHEVMBridge is SepoliaConfig, Ownable2Step {
             outputAmount: encOutputAmount,
             id: id,
             originChainId: uint32(block.chainid),
-            destinationChainId: _destinationChainId,
-            filledStatus: FilledStatus.NOT_FILLED
+            destinationChainId: destinationChainId,
+            filledStatus: FilledStatus.NOT_FILLED,
+            solverPaid: false,
+            timeout: block.timestamp + 24 hours
         });
 
         FHE.allow(encInputAmount, _inputToken);
 
         FHE.allow(encInputAmount, _relayer);
         FHE.allow(encOutputAmount, _relayer);
+        FHE.allow(destinationChainId, _relayer);
 
         // if the input token is not WETH, transfer the amount from the sender to the contract (lock)
-        IConfidentialFungibleToken(_inputToken).confidentialTransferFrom(msg.sender, address(this), encInputAmount);
+        IERC7984(_inputToken).confidentialTransferFrom(msg.sender, address(this), encInputAmount);
 
         doesIntentExist[id] = true;
 
-        emit IntentCreated(intent);
+        emit IntentCreated(_sender, _relayer, intent);
     }
 
     function fulfill(Intent calldata intent) external {
@@ -109,27 +112,35 @@ contract FHEVMBridge is SepoliaConfig, Ownable2Step {
             revert UnauthorizedRelayer();
         }
 
-        require(FHE.isSenderAllowed(intent.inputAmount), "Unauthorized access to encrypted input amount.");
         require(FHE.isSenderAllowed(intent.outputAmount), "Unauthorized access to encrypted output amount.");
 
-        FHE.allowThis(intent.inputAmount);
         FHE.allowThis(intent.outputAmount);
-
         FHE.allow(intent.outputAmount, intent.outputToken);
 
-        FHE.allow(intent.inputAmount, intent.relayer);
-        FHE.allow(intent.outputAmount, intent.relayer);
-
         // if the input token is not WETH, transfer the amount from the contract to the receiver
-        IConfidentialFungibleToken(intent.outputToken).confidentialTransferFrom(
-            intent.relayer,
-            intent.receiver,
-            intent.outputAmount
-        );
+        IERC7984(intent.outputToken).confidentialTransferFrom(intent.relayer, intent.receiver, intent.outputAmount);
 
         doesIntentExist[intent.id] = true;
 
-        emit IntentFulfilled(intent);
+        emit IntentFulfilled(intent.sender, intent.relayer, intent);
+    }
+
+    function fulfill(Intent calldata intent, externalEuint64 _encOutputAmount, bytes calldata _inputProof) external {
+        if (intent.relayer != msg.sender) {
+            revert UnauthorizedRelayer();
+        }
+
+        euint64 encOutputAmount = FHE.fromExternal(_encOutputAmount, _inputProof);
+
+        FHE.allowThis(encOutputAmount);
+        FHE.allow(encOutputAmount, intent.outputToken);
+
+        // if the input token is not WETH, transfer the amount from the contract to the receiver
+        IERC7984(intent.outputToken).confidentialTransferFrom(intent.relayer, intent.receiver, encOutputAmount);
+
+        doesIntentExist[intent.id] = true;
+
+        emit IntentFulfilled(intent.sender, intent.relayer, intent);
     }
 
     function withdraw(
@@ -137,6 +148,6 @@ contract FHEVMBridge is SepoliaConfig, Ownable2Step {
         externalEuint64 _encryptedAmount,
         bytes calldata _inputProof
     ) public onlyOwner {
-        IConfidentialFungibleToken(tokenAddress).confidentialTransfer(msg.sender, _encryptedAmount, _inputProof);
+        IERC7984(tokenAddress).confidentialTransfer(msg.sender, _encryptedAmount, _inputProof);
     }
 }

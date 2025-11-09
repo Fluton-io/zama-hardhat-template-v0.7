@@ -66,6 +66,7 @@ task("bridge", "Bridge cERC20 tokens to FHEVM")
         .createEncryptedInput(bridgeaddress, signerAddress)
         .add64(+inputamount)
         .add64(+outputamount)
+        .add32(+destinationchainid)
         .encrypt();
 
       const tx = await bridgeContract.bridge(
@@ -76,7 +77,7 @@ task("bridge", "Bridge cERC20 tokens to FHEVM")
         outputtokenaddress,
         encryptedAmounts.handles[0],
         encryptedAmounts.handles[1],
-        destinationchainid,
+        encryptedAmounts.handles[2],
         encryptedAmounts.inputProof,
       );
 
