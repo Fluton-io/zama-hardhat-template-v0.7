@@ -25,9 +25,21 @@ task("wrap", "Wrap your erc20 into cERC20")
     console.log(signer.address, tokenaddress, amount);
 
     // Wrap logic goes here
-    const tokenContract = (await ethers.getContractAt("cERC20", tokenaddress, signer)) as unknown as CERC20;
+    const cTokenContract = (await ethers.getContractAt("cERC20", tokenaddress, signer)) as unknown as CERC20;
+    const tokenAddress = await cTokenContract.underlying();
+    const tokenContract = await ethers.getContractAt("IERC20", tokenAddress, signer);
+    const allowance = await tokenContract.allowance(signer.address, tokenaddress);
+
+    if (allowance < amount) {
+      console.log(`Approving ${amount} tokens for wrapping...`);
+      const approveTx = await tokenContract.approve(tokenaddress, amount);
+      await approveTx.wait();
+      console.log(`Approved ${amount} tokens for wrapping.`);
+    } else {
+      console.log(`Sufficient allowance already exists: ${allowance.toString()}`);
+    }
     await fhevm.initializeCLIApi();
-    await tokenContract.wrap(to, amount);
+    await cTokenContract.wrap(to, amount);
 
     console.log(`Wrapped ${amount} of tokens from ${signer.address} to ${to} in token ${tokenaddress}`);
   });

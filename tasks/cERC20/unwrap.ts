@@ -2,7 +2,7 @@ import { task } from "hardhat/config";
 import { CERC20 } from "../../types";
 import addresses from "../../config/addresses";
 
-task("unwrap", "Unwrap your erc20 into cERC20")
+task("unwrap", "Unwrap your cERC20 into ERC20")
   .addOptionalParam("signeraddress", "The address of the signer")
   .addOptionalParam("tokenaddress", "The address of the token contract")
   .addOptionalParam("from", "The address to unwrap from")
