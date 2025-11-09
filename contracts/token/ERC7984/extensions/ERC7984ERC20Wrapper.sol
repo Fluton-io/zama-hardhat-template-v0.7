@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+// OpenZeppelin Confidential Contracts (last updated v0.2.0) (token/extensions/ConfidentialFungibleTokenERC20Wrapper.sol)
 
 pragma solidity ^0.8.27;
 
@@ -8,14 +9,17 @@ import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/interfaces/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
-import {ConfidentialFungibleToken} from "./../ConfidentialFungibleToken.sol";
+import {ERC7984} from "./../ERC7984.sol";
 
 /**
- * @dev A wrapper contract built on top of {ConfidentialFungibleToken} that allows wrapping an `ERC20` token
- * into a confidential fungible token. The wrapper contract implements the `IERC1363Receiver` interface
+ * @dev A wrapper contract built on top of {ERC7984} that allows wrapping an `ERC20` token
+ * into an `ERC7984` token. The wrapper contract implements the `IERC1363Receiver` interface
  * which allows users to transfer `ERC1363` tokens directly to the wrapper with a callback to wrap the tokens.
+ *
+ * WARNING: Minting assumes the full amount of the underlying token transfer has been received, hence some non-standard
+ * tokens such as fee-on-transfer or other deflationary-type tokens are not supported by this wrapper.
  */
-abstract contract ConfidentialFungibleTokenERC20Wrapper is ConfidentialFungibleToken, IERC1363Receiver {
+abstract contract ERC7984ERC20Wrapper is ERC7984, IERC1363Receiver {
     IERC20 private immutable _underlying;
     uint8 private immutable _decimals;
     uint256 private immutable _rate;
@@ -37,7 +41,7 @@ abstract contract ConfidentialFungibleTokenERC20Wrapper is ConfidentialFungibleT
         }
     }
 
-    /// @inheritdoc ConfidentialFungibleToken
+    /// @inheritdoc ERC7984
     function decimals() public view virtual override returns (uint8) {
         return _decimals;
     }
@@ -67,15 +71,15 @@ abstract contract ConfidentialFungibleTokenERC20Wrapper is ConfidentialFungibleT
         bytes calldata data
     ) public virtual returns (bytes4) {
         // check caller is the token contract
-        require(address(underlying()) == msg.sender, ConfidentialFungibleTokenUnauthorizedCaller(msg.sender));
-
-        // transfer excess back to the sender
-        uint256 excess = amount % rate();
-        if (excess > 0) SafeERC20.safeTransfer(underlying(), from, excess);
+        require(address(underlying()) == msg.sender, ERC7984UnauthorizedCaller(msg.sender));
 
         // mint confidential token
         address to = data.length < 20 ? from : address(bytes20(data));
         _mint(to, FHE.asEuint64(SafeCast.toUint64(amount / rate())));
+
+        // transfer excess back to the sender
+        uint256 excess = amount % rate();
+        if (excess > 0) SafeERC20.safeTransfer(underlying(), from, excess);
 
         // return magic value
         return IERC1363Receiver.onTransferReceived.selector;
@@ -103,10 +107,7 @@ abstract contract ConfidentialFungibleTokenERC20Wrapper is ConfidentialFungibleT
      * NOTE: The caller *must* already be approved by ACL for the given `amount`.
      */
     function unwrap(address from, address to, euint64 amount) public virtual {
-        require(
-            FHE.isAllowed(amount, msg.sender),
-            ConfidentialFungibleTokenUnauthorizedUseOfEncryptedAmount(amount, msg.sender)
-        );
+        require(FHE.isAllowed(amount, msg.sender), ERC7984UnauthorizedUseOfEncryptedAmount(amount, msg.sender));
         _unwrap(from, to, amount);
     }
 
@@ -124,24 +125,24 @@ abstract contract ConfidentialFungibleTokenERC20Wrapper is ConfidentialFungibleT
     }
 
     /**
-     * @dev Called by the fhEVM gateway with the decrypted amount `amount` for a request id `requestId`.
-     * Fills unwrap requests.
+     * @dev Fills an unwrap request for a given request id related to a decrypted unwrap amount.
      */
-    function finalizeUnwrap(uint256 requestID, uint64 amount, bytes[] memory signatures) public virtual {
-        FHE.checkSignatures(requestID, signatures);
+    function finalizeUnwrap(
+        uint256 requestID,
+        bytes calldata cleartexts,
+        bytes calldata decryptionProof
+    ) public virtual {
+        FHE.checkSignatures(requestID, cleartexts, decryptionProof);
         address to = _receivers[requestID];
-        require(to != address(0), ConfidentialFungibleTokenInvalidGatewayRequest(requestID));
+        require(to != address(0), ERC7984InvalidGatewayRequest(requestID));
         delete _receivers[requestID];
 
-        SafeERC20.safeTransfer(underlying(), to, amount * rate());
+        SafeERC20.safeTransfer(underlying(), to, abi.decode(cleartexts, (uint64)) * rate());
     }
 
     function _unwrap(address from, address to, euint64 amount) internal virtual {
-        require(to != address(0), ConfidentialFungibleTokenInvalidReceiver(to));
-        require(
-            from == msg.sender || isOperator(from, msg.sender),
-            ConfidentialFungibleTokenUnauthorizedSpender(from, msg.sender)
-        );
+        require(to != address(0), ERC7984InvalidReceiver(to));
+        require(from == msg.sender || isOperator(from, msg.sender), ERC7984UnauthorizedSpender(from, msg.sender));
 
         // try to burn, see how much we actually got
         euint64 burntAmount = _burn(from, amount);
@@ -153,6 +154,15 @@ abstract contract ConfidentialFungibleTokenERC20Wrapper is ConfidentialFungibleT
 
         // register who is getting the tokens
         _receivers[requestID] = to;
+    }
+
+    /**
+     * @dev Returns the default number of decimals of the underlying ERC-20 token that is being wrapped.
+     * Used as a default fallback when {_tryGetAssetDecimals} fails to fetch decimals of the underlying
+     * ERC-20 token.
+     */
+    function _fallbackUnderlyingDecimals() internal pure virtual returns (uint8) {
+        return 18;
     }
 
     /**
@@ -169,6 +179,6 @@ abstract contract ConfidentialFungibleTokenERC20Wrapper is ConfidentialFungibleT
         if (success && encodedDecimals.length == 32) {
             return abi.decode(encodedDecimals, (uint8));
         }
-        return 18;
+        return _fallbackUnderlyingDecimals();
     }
 }
