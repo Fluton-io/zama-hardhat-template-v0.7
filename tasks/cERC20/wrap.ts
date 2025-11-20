@@ -18,8 +18,8 @@ task("wrap", "Wrap your erc20 into cERC20")
     }
 
     if (!tokenaddress) {
-      const tokenDeployment = await deployments.get("cERC20");
-      tokenaddress = tokenDeployment.address || addresses[+chainId].cUSDC; // Default to deployed
+      const tokenDeployment = await deployments.getOrNull("cERC20");
+      tokenaddress = tokenDeployment?.address || addresses[+chainId].cUSDC; // Default to deployed
     }
 
     console.log(signer.address, tokenaddress, amount);

@@ -23,8 +23,8 @@ task("unwrap", "Unwrap your cERC20 into ERC20")
     }
 
     if (!tokenaddress) {
-      const tokenDeployment = await deployments.get("cERC20");
-      tokenaddress = tokenDeployment.address || addresses[+chainId].cUSDC; // Default to deployed
+      const tokenDeployment = await deployments.getOrNull("cERC20");
+      tokenaddress = tokenDeployment?.address || addresses[+chainId].cUSDC; // Default to deployed
     }
 
     const tokenContract = (await ethers.getContractAt("cERC20", tokenaddress, signer)) as unknown as CERC20;

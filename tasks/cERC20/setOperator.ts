@@ -19,13 +19,13 @@ task("setOperator", "Set an operator for cERC20 tokens")
     const signer = await ethers.getSigner(signerAddress);
 
     if (!tokenaddress) {
-      const tokenDeployment = await deployments.get("cERC20");
-      tokenaddress = tokenDeployment.address || addresses[+chainId].cUSDC; // Default to deployed
+      const tokenDeployment = await deployments.getOrNull("cERC20");
+      tokenaddress = tokenDeployment?.address || addresses[+chainId].cUSDC; // Default to deployed
     }
 
     if (!spenderaddress) {
-      const bridgeDeployment = await deployments.get("FHEVMBridge");
-      spenderaddress = bridgeDeployment.address || addresses[+chainId].FHEVMBridge; // Default to deployed bridge address
+      const bridgeDeployment = await deployments.getOrNull("FHEVMBridge");
+      spenderaddress = bridgeDeployment?.address || addresses[+chainId].FHEVMBridge; // Default to deployed bridge address
     }
 
     const tokenContract = (await ethers.getContractAt("cERC20", tokenaddress, signer)) as unknown as CERC20;
