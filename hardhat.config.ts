@@ -20,8 +20,9 @@ const ETHERSCAN_API_KEY: string = vars.get("ETHERSCAN_API_KEY");
 const DEPLOYER_PRIVATE_KEY = vars.get("DEPLOYER_PRIVATE_KEY");
 const USER_PRIVATE_KEY = vars.get("USER_PRIVATE_KEY");
 const RELAYER_PRIVATE_KEY = vars.get("RELAYER_PRIVATE_KEY");
+const FAUCET_PRIVATE_KEY = vars.get("FAUCET_PRIVATE_KEY");
 
-const accounts = [DEPLOYER_PRIVATE_KEY, USER_PRIVATE_KEY, RELAYER_PRIVATE_KEY];
+const accounts = [DEPLOYER_PRIVATE_KEY, USER_PRIVATE_KEY, RELAYER_PRIVATE_KEY, FAUCET_PRIVATE_KEY];
 
 const config: HardhatUserConfig = {
   defaultNetwork: "sepolia",
@@ -29,6 +30,7 @@ const config: HardhatUserConfig = {
     deployer: 0,
     user: 1,
     relayer: 2,
+    faucet: 3,
   },
   etherscan: {
     apiKey: ETHERSCAN_API_KEY,
