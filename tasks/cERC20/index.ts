@@ -1,4 +1,5 @@
 export * from "./balanceOf";
+export * from "./balanceOfAll";
 export * from "./wrap";
 export * from "./unwrap";
 export * from "./setOperator";

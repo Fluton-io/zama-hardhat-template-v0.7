@@ -12,12 +12,12 @@ import {
     externalEaddress
 } from "@fhevm/solidity/lib/FHE.sol";
 import {IERC7984} from "./interfaces/IERC7984.sol";
-import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
 error MsgValueDoesNotMatchInputAmount();
 error UnauthorizedRelayer();
 
-contract FHEVMBridge is SepoliaConfig, Ownable2Step {
+contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
     enum FilledStatus {
         NOT_FILLED,
         FILLED

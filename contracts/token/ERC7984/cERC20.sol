@@ -4,9 +4,9 @@ pragma solidity ^0.8.27;
 import {ERC7984ERC20Wrapper} from "./extensions/ERC7984ERC20Wrapper.sol";
 import {ERC7984} from "./ERC7984.sol";
 import {IERC20} from "@openzeppelin/contracts/interfaces/IERC20.sol";
-import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
-contract cERC20 is ERC7984ERC20Wrapper, SepoliaConfig {
+contract cERC20 is ERC7984ERC20Wrapper, ZamaEthereumConfig {
     constructor(
         IERC20 underlyingToken,
         string memory name_,

@@ -1,7 +1,6 @@
 import { task } from "hardhat/config";
 import addresses from "../../config/addresses";
 import { CERC20 } from "../../types";
-import { FhevmType } from "@fhevm/hardhat-plugin";
 
 task("balanceOf", "Get user balance")
   .addOptionalParam("signeraddress", "The address of the signer")
@@ -25,9 +24,41 @@ task("balanceOf", "Get user balance")
     const tokenContract = (await ethers.getContractAt("cERC20", tokenaddress, signer)) as unknown as CERC20;
     const encryptedBalance = await tokenContract.confidentialBalanceOf(userAddress);
 
+    await fhevm.initializeCLIApi();
+
+    const keypair = fhevm.generateKeypair();
+    const handleContractPairs = [
+      {
+        handle: encryptedBalance.toString() as `0x${string}`,
+        contractAddress: tokenaddress,
+      },
+    ];
+    const startTimeStamp = Math.floor(Date.now() / 1000).toString();
+    const durationDays = "10"; // String for consistency
+    const contractAddresses = [tokenaddress];
+
+    const eip712 = fhevm.createEIP712(keypair.publicKey, contractAddresses, startTimeStamp, durationDays);
+    const signature = await signer.signTypedData(
+      eip712.domain,
+      {
+        UserDecryptRequestVerification: eip712.types.UserDecryptRequestVerification,
+      },
+      eip712.message,
+    );
+
     console.log(`Encrypted Balance of ${userAddress} in token ${tokenaddress} is`, encryptedBalance.toString());
 
-    await fhevm.initializeCLIApi();
-    const decryptedBalance = await fhevm.userDecryptEuint(FhevmType.euint64, encryptedBalance, tokenaddress, signer);
+    const result = await fhevm.userDecrypt(
+      handleContractPairs,
+      keypair.privateKey,
+      keypair.publicKey,
+      signature.replace("0x", ""),
+      contractAddresses,
+      signer.address,
+      startTimeStamp,
+      durationDays,
+    );
+
+    const decryptedBalance = result[encryptedBalance.toString()];
     console.log(`Decrypted Balance of ${userAddress} in token ${tokenaddress} is`, decryptedBalance.toString());
   });

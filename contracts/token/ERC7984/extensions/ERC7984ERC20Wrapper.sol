@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// OpenZeppelin Confidential Contracts (last updated v0.2.0) (token/extensions/ConfidentialFungibleTokenERC20Wrapper.sol)
+// OpenZeppelin Confidential Contracts (last updated v0.3.0) (token/ERC7984/extensions/ERC7984ERC20Wrapper.sol)
 
 pragma solidity ^0.8.27;
 
@@ -24,8 +24,13 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC1363Receiver {
     uint8 private immutable _decimals;
     uint256 private immutable _rate;
 
-    /// @dev Mapping from gateway decryption request ID to the address that will receive the tokens
-    mapping(uint256 decryptionRequest => address) private _receivers;
+    mapping(euint64 unwrapAmount => address recipient) private _unwrapRequests;
+
+    event UnwrapRequested(address indexed receiver, euint64 amount);
+    event UnwrapFinalized(address indexed receiver, euint64 encryptedAmount, uint64 cleartextAmount);
+
+    error InvalidUnwrapRequest(euint64 amount);
+    error ERC7984TotalSupplyOverflow();
 
     constructor(IERC20 underlying_) {
         _underlying = underlying_;
@@ -41,28 +46,10 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC1363Receiver {
         }
     }
 
-    /// @inheritdoc ERC7984
-    function decimals() public view virtual override returns (uint8) {
-        return _decimals;
-    }
-
-    /**
-     * @dev Returns the rate at which the underlying token is converted to the wrapped token.
-     * For example, if the `rate` is 1000, then 1000 units of the underlying token equal 1 unit of the wrapped token.
-     */
-    function rate() public view virtual returns (uint256) {
-        return _rate;
-    }
-
-    /// @dev Returns the address of the underlying ERC-20 token that is being wrapped.
-    function underlying() public view returns (IERC20) {
-        return _underlying;
-    }
-
     /**
      * @dev `ERC1363` callback function which wraps tokens to the address specified in `data` or
      * the address `from` (if no address is specified in `data`). This function refunds any excess tokens
-     * sent beyond the nearest multiple of {rate}. See {wrap} from more details on wrapping tokens.
+     * sent beyond the nearest multiple of {rate} to `from`. See {wrap} from more details on wrapping tokens.
      */
     function onTransferReceived(
         address /*operator*/,
@@ -102,8 +89,7 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC1363Receiver {
      * @dev Unwraps tokens from `from` and sends the underlying tokens to `to`. The caller must be `from`
      * or be an approved operator for `from`. `amount * rate()` underlying tokens are sent to `to`.
      *
-     * NOTE: This is an asynchronous function and waits for decryption to be completed off-chain before disbursing
-     * tokens.
+     * NOTE: The unwrap request created by this function must be finalized by calling {finalizeUnwrap}.
      * NOTE: The caller *must* already be approved by ACL for the given `amount`.
      */
     function unwrap(address from, address to, euint64 amount) public virtual {
@@ -124,20 +110,81 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC1363Receiver {
         _unwrap(from, to, FHE.fromExternal(encryptedAmount, inputProof));
     }
 
-    /**
-     * @dev Fills an unwrap request for a given request id related to a decrypted unwrap amount.
-     */
+    /// @dev Fills an unwrap request for a given cipher-text `burntAmount` with the `cleartextAmount` and `decryptionProof`.
     function finalizeUnwrap(
-        uint256 requestID,
-        bytes calldata cleartexts,
+        euint64 burntAmount,
+        uint64 burntAmountCleartext,
         bytes calldata decryptionProof
     ) public virtual {
-        FHE.checkSignatures(requestID, cleartexts, decryptionProof);
-        address to = _receivers[requestID];
-        require(to != address(0), ERC7984InvalidGatewayRequest(requestID));
-        delete _receivers[requestID];
+        address to = _unwrapRequests[burntAmount];
+        require(to != address(0), InvalidUnwrapRequest(burntAmount));
+        delete _unwrapRequests[burntAmount];
 
-        SafeERC20.safeTransfer(underlying(), to, abi.decode(cleartexts, (uint64)) * rate());
+        bytes32[] memory handles = new bytes32[](1);
+        handles[0] = euint64.unwrap(burntAmount);
+
+        bytes memory cleartexts = abi.encode(burntAmountCleartext);
+
+        FHE.checkSignatures(handles, cleartexts, decryptionProof);
+
+        SafeERC20.safeTransfer(underlying(), to, burntAmountCleartext * rate());
+
+        emit UnwrapFinalized(to, burntAmount, burntAmountCleartext);
+    }
+
+    /// @inheritdoc ERC7984
+    function decimals() public view virtual override returns (uint8) {
+        return _decimals;
+    }
+
+    /**
+     * @dev Returns the rate at which the underlying token is converted to the wrapped token.
+     * For example, if the `rate` is 1000, then 1000 units of the underlying token equal 1 unit of the wrapped token.
+     */
+    function rate() public view virtual returns (uint256) {
+        return _rate;
+    }
+
+    /// @dev Returns the address of the underlying ERC-20 token that is being wrapped.
+    function underlying() public view returns (IERC20) {
+        return _underlying;
+    }
+
+    /**
+     * @dev Returns the underlying balance divided by the {rate}, a value greater or equal to the actual
+     * {confidentialTotalSupply}.
+     *
+     * NOTE: The return value of this function can be inflated by directly sending underlying tokens to the wrapper contract.
+     * Reductions will lag compared to {confidentialTotalSupply} since it is updated on {unwrap} while this function updates
+     * on {finalizeUnwrap}.
+     */
+    function totalSupply() public view virtual returns (uint256) {
+        return underlying().balanceOf(address(this)) / rate();
+    }
+
+    /// @dev Returns the maximum total supply of wrapped tokens supported by the encrypted datatype.
+    function maxTotalSupply() public view virtual returns (uint256) {
+        return type(uint64).max;
+    }
+
+    /**
+     * @dev This function must revert if the new {confidentialTotalSupply} is invalid (overflow occurred).
+     *
+     * NOTE: Overflow can be detected here since the wrapper holdings are non-confidential. In other cases, it may be impossible
+     * to infer total supply overflow synchronously. This function may revert even if the {confidentialTotalSupply} did
+     * not overflow.
+     */
+    function _checkConfidentialTotalSupply() internal virtual {
+        if (totalSupply() > maxTotalSupply()) {
+            revert ERC7984TotalSupplyOverflow();
+        }
+    }
+
+    function _update(address from, address to, euint64 amount) internal virtual override returns (euint64) {
+        if (from == address(0)) {
+            _checkConfidentialTotalSupply();
+        }
+        return super._update(from, to, amount);
     }
 
     function _unwrap(address from, address to, euint64 amount) internal virtual {
@@ -146,14 +193,12 @@ abstract contract ERC7984ERC20Wrapper is ERC7984, IERC1363Receiver {
 
         // try to burn, see how much we actually got
         euint64 burntAmount = _burn(from, amount);
+        FHE.makePubliclyDecryptable(burntAmount);
 
-        // decrypt that burntAmount
-        bytes32[] memory cts = new bytes32[](1);
-        cts[0] = euint64.unwrap(burntAmount);
-        uint256 requestID = FHE.requestDecryption(cts, this.finalizeUnwrap.selector);
+        assert(_unwrapRequests[burntAmount] == address(0));
+        _unwrapRequests[burntAmount] = to;
 
-        // register who is getting the tokens
-        _receivers[requestID] = to;
+        emit UnwrapRequested(to, burntAmount);
     }
 
     /**
