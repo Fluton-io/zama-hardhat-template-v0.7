@@ -75,6 +75,11 @@ contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
         require(FHE.isSenderAllowed(encInputAmount), "Unauthorized access to encrypted input amount.");
         require(FHE.isSenderAllowed(encOutputAmount), "Unauthorized access to encrypted output amount.");
         require(FHE.isSenderAllowed(destinationChainId), "Unauthorized access to encrypted destination chain ID.");
+
+        FHE.allow(encInputAmount, _sender);
+        FHE.allow(encOutputAmount, _sender);
+        FHE.allow(destinationChainId, _sender);
+
         uint256 id = uint256(keccak256(abi.encodePacked(_sender, _receiver, _relayer, block.timestamp, block.number)));
 
         Intent memory intent = Intent({
