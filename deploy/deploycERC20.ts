@@ -15,7 +15,7 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     throw new Error(`No addresses found for chainId ${chainId}`);
   }
 
-  const constructorArguments = [addresses[+chainId].U, "Confidential U", "cU", "https://api.fluton.io"];
+  const constructorArguments = [addresses[+chainId].AAVE, "Confidential AAVE", "cAAVE", "https://api.fluton.io"];
 
   const deployed = await deploy("cERC20", {
     from: deployer,

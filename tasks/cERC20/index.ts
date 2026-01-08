@@ -5,3 +5,4 @@ export * from "./unwrap";
 export * from "./setOperator";
 export * from "./isOperator";
 export * from "./transferFrom";
+export * from "./transfer";

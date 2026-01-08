@@ -2,6 +2,7 @@ import { DeployFunction } from "hardhat-deploy/types";
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 
 import { sleep } from "../utils";
+import addresses from "../config/addresses";
 
 const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployer } = await hre.getNamedAccounts();
@@ -10,9 +11,11 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
 
   console.log(deployer, chainId);
 
+  const constructorArguments = [addresses[+chainId].L0_ENDPOINT];
+
   const deployed = await deploy("FHEVMBridge", {
     from: deployer,
-    args: [],
+    args: constructorArguments,
     log: true,
   });
 
@@ -21,7 +24,7 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const verificationArgs = {
     address: deployed.address,
     contract: "contracts/FHEVMBridge.sol:FHEVMBridge",
-    constructorArguments: [],
+    constructorArguments,
   };
 
   console.info("\nSubmitting verification request on Etherscan...");

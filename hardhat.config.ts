@@ -61,6 +61,11 @@ const config: HardhatUserConfig = {
       chainId: 11155111,
       url: `https://sepolia.infura.io/v3/${INFURA_API_KEY}`,
     },
+    mainnet: {
+      accounts,
+      chainId: 1,
+      url: `https://mainnet.infura.io/v3/${INFURA_API_KEY}`,
+    },
   },
   paths: {
     artifacts: "./artifacts",

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.24;
 
-import "@openzeppelin/contracts/access/Ownable2Step.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import {
     FHE,
     euint64,
@@ -11,13 +13,27 @@ import {
     externalEuint32,
     externalEaddress
 } from "@fhevm/solidity/lib/FHE.sol";
-import {IERC7984} from "./interfaces/IERC7984.sol";
+import {OApp, Origin, MessagingFee} from "@layerzerolabs/oapp-evm/contracts/oapp/OApp.sol";
+import {OAppOptionsType3} from "@layerzerolabs/oapp-evm/contracts/oapp/libs/OAppOptionsType3.sol";
 import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {IERC7984} from "./interfaces/IERC7984.sol";
 
 error MsgValueDoesNotMatchInputAmount();
 error UnauthorizedRelayer();
+error IntentNotFound();
+error IntentAlreadyFilled();
+error SolverAlreadyPaid();
+error InvalidAddress();
+error InvalidToken();
+error InvalidChainId();
 
-contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
+contract FHEVMBridge is ZamaEthereumConfig, Ownable, ReentrancyGuard, Pausable, OApp, OAppOptionsType3 {
+    /// @notice Msg type for sending a string, for use in OAppOptionsType3 as an enforced option
+    uint16 public constant SEND = 1;
+
+    uint256 public fee = 100; // 1%
+    address public feeReceiver = 0xBdc3f1A02e56CD349d10bA8D2B038F774ae22731;
+
     enum FilledStatus {
         NOT_FILLED,
         FILLED
@@ -39,10 +55,10 @@ contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
         uint256 timeout;
     }
 
-    uint256 public fee = 100; // 1%
-    address public feeReceiver = 0xBdc3f1A02e56CD349d10bA8D2B038F774ae22731;
-
+    mapping(uint256 intentId => Intent) public intents;
     mapping(uint256 intentId => bool exists) public doesIntentExist;
+
+    mapping(uint32 chainId => uint32 eid) public chainIdToEid;
 
     event IntentCreated(address indexed sender, address indexed relayer, Intent intent);
     event IntentFulfilled(address indexed sender, address indexed relayer, Intent intent);
@@ -51,7 +67,19 @@ contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
 
     // WETH contract can not e used yet.
     // _ibcHandler and _timeout were not implemented yet.
-    constructor() Ownable(msg.sender) {}
+    constructor(address _endpoint) OApp(_endpoint, msg.sender) Ownable(msg.sender) {}
+
+    function quote(
+        uint32 _dstEid,
+        string calldata _string,
+        bytes calldata _options,
+        bool _payInLzToken
+    ) public view returns (MessagingFee memory fee) {
+        bytes memory _message = abi.encode(_string);
+        // combineOptions (from OAppOptionsType3) merges enforced options set by the contract owner
+        // with any additional execution options provided by the caller
+        fee = _quote(_dstEid, _message, combineOptions(_dstEid, SEND, _options), _payInLzToken);
+    }
 
     function bridge(
         address _sender,
@@ -63,7 +91,15 @@ contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
         externalEuint64 _encOutputAmount,
         externalEuint32 _destinationChainId,
         bytes calldata _inputProof
-    ) public {
+    ) public nonReentrant whenNotPaused {
+        // Input validation
+        if (_sender == address(0) || _receiver == address(0) || _relayer == address(0)) {
+            revert InvalidAddress();
+        }
+        if (_inputToken == address(0) || _outputToken == address(0)) {
+            revert InvalidToken();
+        }
+
         euint64 encInputAmount = FHE.fromExternal(_encInputAmount, _inputProof);
         euint64 encOutputAmount = FHE.fromExternal(_encOutputAmount, _inputProof);
         euint32 destinationChainId = FHE.fromExternal(_destinationChainId, _inputProof);
@@ -72,15 +108,33 @@ contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
         FHE.allowThis(encOutputAmount);
         FHE.allowThis(destinationChainId);
 
-        require(FHE.isSenderAllowed(encInputAmount), "Unauthorized access to encrypted input amount.");
-        require(FHE.isSenderAllowed(encOutputAmount), "Unauthorized access to encrypted output amount.");
-        require(FHE.isSenderAllowed(destinationChainId), "Unauthorized access to encrypted destination chain ID.");
+        FHE.allow(encInputAmount, _relayer);
+        FHE.allow(encOutputAmount, _relayer);
+        FHE.allow(destinationChainId, _relayer);
 
         FHE.allow(encInputAmount, _sender);
         FHE.allow(encOutputAmount, _sender);
         FHE.allow(destinationChainId, _sender);
 
-        uint256 id = uint256(keccak256(abi.encodePacked(_sender, _receiver, _relayer, block.timestamp, block.number)));
+        FHE.allow(encInputAmount, _inputToken);
+
+        // if the input token is not WETH, transfer the amount from the sender to the contract (lock)
+        IERC7984(_inputToken).confidentialTransferFrom(msg.sender, address(this), encInputAmount);
+
+        uint256 id = uint256(
+            keccak256(
+                abi.encodePacked(
+                    _sender,
+                    _receiver,
+                    _relayer,
+                    _inputToken,
+                    _outputToken,
+                    destinationChainId,
+                    block.timestamp,
+                    block.number // Add block number for better uniqueness
+                )
+            )
+        );
 
         Intent memory intent = Intent({
             sender: _sender,
@@ -98,61 +152,98 @@ contract FHEVMBridge is ZamaEthereumConfig, Ownable2Step {
             timeout: block.timestamp + 24 hours
         });
 
-        FHE.allow(encInputAmount, _inputToken);
-
-        FHE.allow(encInputAmount, _relayer);
-        FHE.allow(encOutputAmount, _relayer);
-        FHE.allow(destinationChainId, _relayer);
-
-        // if the input token is not WETH, transfer the amount from the sender to the contract (lock)
-        IERC7984(_inputToken).confidentialTransferFrom(msg.sender, address(this), encInputAmount);
-
+        intents[id] = intent;
         doesIntentExist[id] = true;
 
         emit IntentCreated(_sender, _relayer, intent);
     }
 
-    function fulfill(Intent calldata intent) external {
-        if (intent.relayer != msg.sender) {
-            revert UnauthorizedRelayer();
-        }
-
-        require(FHE.isSenderAllowed(intent.outputAmount), "Unauthorized access to encrypted output amount.");
-
-        FHE.allowThis(intent.outputAmount);
-        FHE.allow(intent.outputAmount, intent.outputToken);
-
-        // if the input token is not WETH, transfer the amount from the contract to the receiver
-        IERC7984(intent.outputToken).confidentialTransferFrom(intent.relayer, intent.receiver, intent.outputAmount);
-
-        doesIntentExist[intent.id] = true;
-
-        emit IntentFulfilled(intent.sender, intent.relayer, intent);
-    }
-
-    function fulfill(Intent calldata intent, externalEuint64 _encOutputAmount, bytes calldata _inputProof) external {
+    function fulfill(
+        Intent calldata intent,
+        externalEuint64 _encOutputAmount,
+        bytes calldata _inputProof,
+        bytes memory _options
+    ) public payable whenNotPaused {
         if (intent.relayer != msg.sender) {
             revert UnauthorizedRelayer();
         }
 
         euint64 encOutputAmount = FHE.fromExternal(_encOutputAmount, _inputProof);
 
-        FHE.allowThis(encOutputAmount);
-        FHE.allow(encOutputAmount, intent.outputToken);
+        fulfill(intent, encOutputAmount, _options);
+    }
+
+    function fulfill(Intent calldata intent, euint64 outputAmount, bytes memory _options) public payable whenNotPaused {
+        if (intent.relayer != msg.sender) {
+            revert UnauthorizedRelayer();
+        }
+
+        // Check if this intent already exists and is filled on THIS chain
+        if (doesIntentExist[intent.id] && intents[intent.id].filledStatus == FilledStatus.FILLED) {
+            revert IntentAlreadyFilled();
+        }
+
+        FHE.allowThis(outputAmount);
+        FHE.allow(outputAmount, intent.outputToken);
 
         // if the input token is not WETH, transfer the amount from the contract to the receiver
-        IERC7984(intent.outputToken).confidentialTransferFrom(intent.relayer, intent.receiver, encOutputAmount);
+        IERC7984(intent.outputToken).confidentialTransferFrom(intent.relayer, intent.receiver, outputAmount);
 
+        intents[intent.id] = intent;
+        intents[intent.id].filledStatus = FilledStatus.FILLED;
         doesIntentExist[intent.id] = true;
+
+        // Send message back to origin chain to pay the solver
+        uint32 _dstEid = chainIdToEid[intent.originChainId];
+        bytes memory _message = abi.encode(intent.id);
+
+        _lzSend(_dstEid, _message, _options, MessagingFee(msg.value, 0), payable(msg.sender));
 
         emit IntentFulfilled(intent.sender, intent.relayer, intent);
     }
 
-    function withdraw(
-        address tokenAddress,
-        externalEuint64 _encryptedAmount,
-        bytes calldata _inputProof
-    ) public onlyOwner {
-        IERC7984(tokenAddress).confidentialTransfer(msg.sender, _encryptedAmount, _inputProof);
+    function getIntent(uint256 intentId) external view returns (Intent memory) {
+        return intents[intentId];
+    }
+
+    // Emergency pause functions
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
+
+    function setChainIdToEid(uint32 _chainId, uint32 _eid) external onlyOwner {
+        if (_chainId == 0 || _eid == 0) {
+            revert InvalidChainId();
+        }
+        chainIdToEid[_chainId] = _eid;
+    }
+
+    function _lzReceive(
+        Origin calldata /*_origin*/,
+        bytes32 /*_guid*/,
+        bytes calldata _message,
+        address /*_executor*/,
+        bytes calldata /*_extraData*/
+    ) internal override {
+        uint256 intentId = abi.decode(_message, (uint256));
+
+        if (!doesIntentExist[intentId]) {
+            revert IntentNotFound();
+        }
+
+        Intent storage intent = intents[intentId];
+
+        if (intent.solverPaid) {
+            revert SolverAlreadyPaid();
+        }
+
+        IERC7984(intent.inputToken).confidentialTransfer(intent.relayer, intent.inputAmount);
+
+        intent.solverPaid = true;
+        emit IntentRepaid(intent.sender, intent.relayer, intent);
     }
 }
