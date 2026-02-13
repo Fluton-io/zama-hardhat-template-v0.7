@@ -1,9 +1,8 @@
 import { task } from "hardhat/config";
-import { createInstance, FhevmInstanceConfig, MainnetConfig } from "@zama-fhe/relayer-sdk/node";
 import addresses from "../../config/addresses";
 import { CERC20 } from "../../types";
 
-task("transfer", "Transfer cERC20 tokens from user address to another")
+task("transferFromAndCall", "Transfer cERC20 tokens from one address to another and call")
   .addOptionalParam("signeraddress", "The address of the signer")
   .addOptionalParam("tokenaddress", "The address of the token contract")
   .addOptionalParam("from", "sender address")
@@ -17,7 +16,7 @@ task("transfer", "Transfer cERC20 tokens from user address to another")
 
     if (!tokenaddress) {
       const tokenDeployment = await deployments.getOrNull("cERC20");
-      tokenaddress = addresses[+chainId].cUSDC; // Default to deployed
+      tokenaddress = tokenDeployment?.address || addresses[+chainId].cUSDC; // Default to deployed
     }
 
     if (!to) {
@@ -30,18 +29,14 @@ task("transfer", "Transfer cERC20 tokens from user address to another")
 
     const tokenContract = (await ethers.getContractAt("cERC20", tokenaddress, signer)) as unknown as CERC20;
 
-    const config: FhevmInstanceConfig = {
-      ...MainnetConfig,
-      network: "https://mainnet.infura.io/v3/5614c116efd34f94a3679f8219cb4cd0",
-    };
-    const zamaClient = await createInstance(config);
+    await fhevm.initializeCLIApi();
 
-    const encryptedAmount = await zamaClient.createEncryptedInput(tokenaddress, signerAddress).add64(+amount).encrypt();
-    await tokenContract["confidentialTransferFrom(address,address,bytes32,bytes)"](
-      from,
+    const encryptedAmount = await fhevm.createEncryptedInput(tokenaddress, signerAddress).add64(+amount).encrypt();
+    await tokenContract["confidentialTransferAndCall(address,bytes32,bytes,bytes)"](
       to,
       encryptedAmount.handles[0],
       encryptedAmount.inputProof,
+      "0x",
     );
 
     console.log(`Transferred ${amount} cERC20 tokens from ${from} to ${to} using token ${tokenaddress}`);

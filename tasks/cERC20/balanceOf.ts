@@ -9,8 +9,8 @@ task("balanceOf", "Get user balance")
   .setAction(async ({ signeraddress, tokenaddress, useraddress }, hre) => {
     const { ethers, getChainId, getNamedAccounts, fhevm } = hre;
     const chainId = await getChainId();
-    const userAddress = useraddress || (await getNamedAccounts()).user;
-    const signerAddress = signeraddress || (await getNamedAccounts()).user;
+    const signerAddress = signeraddress || (await getNamedAccounts()).deployer;
+    const userAddress = useraddress || signerAddress;
     const signer = await ethers.getSigner(signerAddress);
 
     if (!addresses[+chainId]) {

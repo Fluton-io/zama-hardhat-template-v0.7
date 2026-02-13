@@ -11,7 +11,7 @@ task("transferFrom", "Transfer cERC20 tokens from one address to another")
   .setAction(async ({ signeraddress, tokenaddress, to, from, amount }, hre) => {
     const { ethers, deployments, getChainId, getNamedAccounts, fhevm } = hre;
     const chainId = await getChainId();
-    const signerAddress = signeraddress || (await getNamedAccounts()).user;
+    const signerAddress = signeraddress || (await getNamedAccounts()).deployer;
     const signer = await ethers.getSigner(signerAddress);
 
     if (!tokenaddress) {
